@@ -127,7 +127,7 @@
   <div class="container">
     <h1>Finca — Finance Manager</h1>
     <p class="subtitle">
-      Track investments, sales, profits, expenses & delivery fees with beautiful charts.
+      Track investments, sales, profits, expenses & delivery fees with live charts.
     </p>
 
     <div class="controls">
@@ -176,7 +176,6 @@
 
     <div class="save-status" id="saveStatus">Saved to folder</div>
 
-    <!-- Charts -->
     <div class="charts">
       <div class="chart-container">
         <div class="chart-title">Monthly Cash Flow</div>
@@ -196,7 +195,7 @@
     // ========== STATE ==========
     let state = JSON.parse(localStorage.getItem('financeState')) || {
       cash: 0, totalInvested: 0, totalReinvested: 0, totalReturns: 0, totalProfits: 0,
-      totalDeliveryFees: 0, inventory: [], transactions: []
+      totalDeliveryFees: 0, totalExpenses: 0, inventory: [], transactions: []
     };
 
     let folderHandle = null;
@@ -259,7 +258,7 @@
       });
       const sorted = Object.keys(monthly).sort();
       return {
-        labels: sorted.map(k => monthly[k].label),
+        labels: sorted.map(k => monthly[key].label),
         income: sorted.map(k => monthly[k].income),
         expenses: sorted.map(k => monthly[k].expenses),
         delivery: sorted.map(k => monthly[k].delivery)
@@ -284,43 +283,21 @@
       return { dates, balances };
     }
 
-    // ========== REST OF LOGIC (same as before) ==========
-    async function autoExport() { /* ... same as before ... */ }
-    function showSaveStatus() { saveStatus.classList.add('show'); setTimeout(() => saveStatus.classList.remove('show'), 2000); }
-
-    document.getElementById('chooseFolderBtn').addEventListener('click', async () => {
-      try { folderHandle = await window.showDirectoryPicker(); alert('Folder selected!'); await autoExport(); }
-      catch (e) { if (e.name !== 'AbortError') alert('Failed'); }
-    });
-
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'}));
-      a.download = `finca_${new Date().toISOString().slice(0,10)}.json`;
-      a.click();
-    });
-
-    document.getElementById('clearAllBtn').addEventListener('click', () => {
-      if (confirm('Delete ALL data?')) {
-        state = { cash:0, totalInvested:0, totalReinvested:0, totalReturns:0, totalProfits:0, totalDeliveryFees:0, inventory:[], transactions:[] };
-        localStorage.removeItem('financeState');
-        updateAll();
-        createCharts();
-        autoExport();
-      }
-    });
-
+    // ========== REBUILD STATE (NOW 100% CORRECT) ==========
     function rebuildState() {
-      state.cash = state.totalInvested = state.totalReinvested = state.totalReturns = state.totalProfits = state.totalDeliveryFees = 0;
+      state.cash = state.totalInvested = state.totalReinvested = state.totalReturns = state.totalProfits = state.totalDeliveryFees = state.totalExpenses = 0;
       state.inventory = [];
+
       const sorted = [...state.transactions].sort((a,b) => new Date(a.date) - new Date(b.date));
+
       sorted.forEach(t => {
         if (t.type === 'buy') {
           const costPer = t.amount / t.quantity;
           state.inventory.push({ date: t.date, costPer, quantityRemaining: t.quantity });
           if (t.source === 'invest') state.totalInvested += t.amount;
           else { state.cash -= t.amount; state.totalReinvested += t.amount; }
-        } else if (t.type === 'sell') {
+        } 
+        else if (t.type === 'sell') {
           let rem = t.quantity, cog = 0, i = 0;
           while (rem > 0 && i < state.inventory.length) {
             const lot = state.inventory[i];
@@ -336,15 +313,21 @@
           state.cash += totalSale;
           state.totalReturns += totalSale;
           state.totalProfits += profit;
+
           if (t.hasDeliveryFee) {
             const fee = totalSale * 0.01;
             state.cash -= fee;
             state.totalDeliveryFees += fee;
           }
         }
+        else if (t.type === 'expense') {
+          state.cash -= t.amount;
+          state.totalExpenses += t.amount;
+        }
       });
     }
 
+    // ========== UPDATE UI ==========
     function updateSummaries() {
       document.getElementById('invested').textContent = state.totalInvested.toFixed(2) + ' ৳';
       document.getElementById('reinvested').textContent = state.totalReinvested.toFixed(2) + ' ৳';
@@ -352,12 +335,12 @@
       document.getElementById('earned').textContent = state.totalProfits.toFixed(2) + ' ৳';
       document.getElementById('cash').textContent = state.cash.toFixed(2) + ' ৳';
       document.getElementById('deliveryFees').textContent = state.totalDeliveryFees.toFixed(2) + ' ৳';
+      document.getElementById('expenses').textContent = state.totalExpenses.toFixed(2) + ' ৳';
+
       const qty = state.inventory.reduce((s,l) => s + l.quantityRemaining, 0);
       const val = state.inventory.reduce((s,l) => s + l.quantityRemaining * l.costPer, 0);
       document.getElementById('inventoryQty').textContent = qty;
       document.getElementById('inventoryValue').textContent = val.toFixed(2) + ' ৳';
-      const exp = state.transactions.filter(t => t.type === 'expense').reduce((s,t) => s + t.amount, 0);
-      document.getElementById('expenses').textContent = exp.toFixed(2) + ' ৳';
     }
 
     function updateTransactionList() {
@@ -372,8 +355,8 @@
           const cost = (t.amount / t.quantity).toFixed(2);
           html = `<strong>Buy (${t.source})</strong>: ${t.quantity} × ${cost} ৳ = ${t.amount.toFixed(2)} ৳`;
         } else if (t.type === 'sell') {
-          const profit = (t.profit || 0).toFixed(2);
           const total = (t.quantity * t.amount).toFixed(2);
+          const profit = ((t.quantity * t.amount) - (t.cog || 0)).toFixed(2);
           html = `<strong style="color:#32d74b">Sell</strong>: ${t.quantity} × ${t.amount.toFixed(2)} ৳ = ${total} ৳ <small>(Profit: ${profit} ৳)</small>`;
           if (t.hasDeliveryFee) {
             const fee = (t.quantity * t.amount * 0.01).toFixed(2);
@@ -387,7 +370,16 @@
         const del = document.createElement('button');
         del.textContent = 'Delete';
         del.className = 'delete-btn';
-        del.onclick = () => { if (confirm('Delete?')) { state.transactions.splice(idx, 1); rebuildState(); saveState(); updateAll(); createCharts(); autoExport(); }};
+        del.onclick = () => {
+          if (confirm('Delete this transaction?')) {
+            state.transactions.splice(idx, 1);
+            rebuildState();
+            saveState();
+            updateAll();
+            createCharts();
+            autoExport();
+          }
+        };
         li.appendChild(del);
         list.appendChild(li);
       });
@@ -403,12 +395,11 @@
       localStorage.setItem('financeState', JSON.stringify(state));
     }
 
-    // Form logic (same as before)
+    // ========== FORM ==========
     const typeSel = document.getElementById('transactionType');
     const deliveryOption = document.getElementById('deliveryOption');
     const deliveryCheckbox = document.getElementById('deliveryCheckbox');
     const quantityInput = document.getElementById('quantity');
-    const amountInput = document.getElementById('amount');
 
     typeSel.addEventListener('change', () => {
       const type = typeSel.value;
@@ -422,7 +413,7 @@
       e.preventDefault();
       const type = typeSel.value;
       const qty = type === 'expense' ? 1 : parseFloat(quantityInput.value);
-      const amt = parseFloat(amountInput.value);
+      const amt = parseFloat(document.getElementById('amount').value);
       const date = document.getElementById('date').value;
       if (isNaN(amt) || !date || (type !== 'expense' && isNaN(qty))) return;
 
@@ -436,7 +427,8 @@
         else { state.cash -= amt; state.totalReinvested += amt; }
       } else if (type === 'sell') {
         trans.quantity = qty;
-        if (qty > state.inventory.reduce((s,l)=>s+l.quantityRemaining,0)) return alert('Not enough inventory!');
+        const invQty = state.inventory.reduce((s,l)=>s+l.quantityRemaining,0);
+        if (qty > invQty) return alert('Not enough inventory!');
         let rem = qty, cog = 0, i = 0;
         while (rem > 0 && i < state.inventory.length) {
           const lot = state.inventory[i];
@@ -448,10 +440,10 @@
           else i++;
         }
         const totalSale = qty * amt;
-        trans.profit = totalSale - cog;
+        trans.cog = cog;
         state.cash += totalSale;
         state.totalReturns += totalSale;
-        state.totalProfits += trans.profit;
+        state.totalProfits += (totalSale - cog);
         if (deliveryCheckbox.checked) {
           const fee = totalSale * 0.01;
           state.cash -= fee;
@@ -461,6 +453,7 @@
       } else if (type === 'expense') {
         if (state.cash < amt) return alert('Not enough cash!');
         state.cash -= amt;
+        state.totalExpenses += amt;
       }
 
       state.transactions.push(trans);
@@ -473,7 +466,14 @@
       typeSel.dispatchEvent(new Event('change'));
     });
 
-    // Import
+    // ========== EXPORT / IMPORT / INIT ==========
+    document.getElementById('exportBtn').addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'}));
+      a.download = `finca_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+    });
+
     document.getElementById('importBtn').addEventListener('click', () => {
       const input = document.createElement('input');
       input.type = 'file'; input.accept = '.json';
@@ -487,7 +487,7 @@
             saveState();
             updateAll();
             autoExport();
-            alert('Imported successfully!');
+            alert('Import successful!');
           } catch { alert('Invalid file'); }
         };
         reader.readAsText(file);
@@ -495,7 +495,33 @@
       input.click();
     });
 
-    // INIT
+    document.getElementById('chooseFolderBtn').addEventListener('click', async () => {
+      try { folderHandle = await window.showDirectoryPicker(); alert('Folder selected!'); await autoExport(); }
+      catch (e) { if (e.name !== 'AbortError') alert('Failed'); }
+    });
+
+    async function autoExport() {
+      if (!folderHandle) return;
+      try {
+        const fileHandle = await folderHandle.getFileHandle('finance_backup.json', { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(state, null, 2));
+        await writable.close();
+        saveStatus.classList.add('show');
+        setTimeout(() => saveStatus.classList.remove('show'), 2000);
+      } catch (e) { console.warn(e); }
+    }
+
+    document.getElementById('clearAllBtn').addEventListener('click', () => {
+      if (confirm('Delete ALL data?')) {
+        state = { cash:0, totalInvested:0, totalReinvested:0, totalReturns:0, totalProfits:0, totalDeliveryFees:0, totalExpenses:0, inventory:[], transactions:[] };
+        localStorage.removeItem('financeState');
+        updateAll();
+        autoExport();
+      }
+    });
+
+    // ========== START ==========
     rebuildState();
     updateAll();
     typeSel.dispatchEvent(new Event('change'));
